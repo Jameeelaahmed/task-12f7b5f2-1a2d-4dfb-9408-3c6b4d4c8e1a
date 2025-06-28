@@ -2,24 +2,30 @@
 	import { onMount } from 'svelte';
 	import { getBestLocation, saveUserLocation } from '$lib/utils/indexedDB.js';
 
-	let mapDiv;
-	let center = { lat: 30.033, lng: 31.233 };
-	let isLoading = true;
-	let locationError = null;
-	let map = null;
-	let marker = null;
-	let googleMapsReady = false;
-	let mapError = null;
+	let mapDiv; // DOM reference to the map container
+	let center = { lat: 30.033, lng: 31.233 }; // Default location (Cairo) (Fallback location)
+	let isLoading = true; // Show loading spinner while initializing
+	let locationError = null; // Show loading spinner while initializing
+	let map = null; // Show loading spinner while initializing
+	let marker = null; // Will hold draggable marker
+	let googleMapsReady = false; // Whether Google Maps SDK is loaded
+	let mapError = null; // Whether Google Maps SDK is loaded
 
+	//**
+	// why on mount?
+	// because map needs to find its refrence div to exist in the dom before initialization
+	// so using on mount makes sure component is fully mounted and all dom bindings are
+	// established before codee runs */
 	onMount(async () => {
 		try {
-			// Get location from IndexedDB
+			// Get geolocation saved in indexed db
 			const location = await getBestLocation(center);
+			const { lat, lng } = location;
 			center = {
-				lat: parseFloat(location.lat),
-				lng: parseFloat(location.lng)
+				lat: +lat,
+				lng: +lng
 			};
-			console.log('📍 Using location:', center);
+			console.log('Using location:', center);
 		} catch (error) {
 			console.error('Location error:', error);
 			locationError = error.message;
@@ -29,20 +35,32 @@
 		}
 	});
 
+	// loads Google Maps JavaScript API only when needed
 	async function loadGoogleMaps() {
+		// check if  google object and google map is already there so it avoids loading it twice
 		if (window.google && window.google.maps) {
 			googleMapsReady = true;
+			// if already loaded, immediately initialize the map
 			initMap();
 			return;
 		}
 
+		// Check if API key is configured
+		const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+		if (!apiKey) {
+			mapError = 'Google Maps API key not configured. Please check your .env file.';
+			console.error('VITE_GOOGLE_MAPS_API_KEY not found in environment variables');
+			return;
+		}
+
 		const script = document.createElement('script');
-		script.src = `https://maps.googleapis.com/maps/api/js?key=AIzaSyAOksvFQRQimvkC8buPYh4Yx-6bc88gR-o&libraries=places,marker&callback=initMap`;
+		script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,marker&callback=initMap`;
+		// async = downloads in background, defer = waits for DOM ready
 		script.async = true;
 		script.defer = true;
 
 		window.initMap = () => {
-			console.log('✅ Google Maps API loaded');
+			console.log('Google Maps API loaded');
 			googleMapsReady = true;
 			initMap();
 		};
@@ -82,22 +100,22 @@
 				title: 'Your Location'
 			});
 
-			// Handle drag events
-			marker.addListener('dragend', async (event) => {
-				// Get position as serializable object
+			// debounce
+
+			let saveTimeout;
+
+			marker.addListener('dragend', (event) => {
+				clearTimeout(saveTimeout); // 🧽 Cancel previous save if not completed
+
 				const newLocation = {
 					lat: event.latLng.lat(),
 					lng: event.latLng.lng()
 				};
 
-				// Save to storage
-				await saveUserLocation(newLocation);
-
-				// Update center with numbers
-				center = {
-					lat: newLocation.lat,
-					lng: newLocation.lng
-				};
+				saveTimeout = setTimeout(async () => {
+					await saveUserLocation(newLocation); // 💾 Save only once after delay
+					center = newLocation;
+				}, 250); // Wait 250ms after the last drag
 			});
 
 			console.log('🗺️ Map initialized at:', center);
