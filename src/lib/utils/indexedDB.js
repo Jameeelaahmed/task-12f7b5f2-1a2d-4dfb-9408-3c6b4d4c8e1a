@@ -123,14 +123,34 @@ export async function getUserLocation() {
     }
 }
 
-export async function getBestLocation(fallback = { lat: 30.033, lng: 31.233 }) {
-    try {
-        const saved = await getUserLocation();
-        if (saved) return saved;
+/**
+ * Unified location function with configurable behavior
+ * @param {Object} options - Configuration options
+ * @param {boolean} options.forceFresh - If true, always get fresh GPS data
+ * @param {Object} options.fallback - Default location if all else fails
+ * @param {number} options.timeout - GPS timeout in milliseconds
+ * @param {boolean} options.throwOnError - If true, throw errors instead of returning fallback
+ */
+export async function getLocation(options = {}) {
+    const {
+        forceFresh = false,
+        fallback = { lat: 30.033, lng: 31.233 },
+        timeout = 5000,
+        throwOnError = false
+    } = options;
 
-        return new Promise((resolve) => {
+    try {
+        // Check saved location first (unless forcing fresh)
+        if (!forceFresh) {
+            const saved = await getUserLocation();
+            if (saved) return saved;
+        }
+
+        // Get fresh GPS location
+        return new Promise((resolve, reject) => {
             if (!navigator.geolocation) {
-                return resolve(fallback);
+                const error = new Error('Geolocation is not supported by this browser');
+                return throwOnError ? reject(error) : resolve(fallback);
             }
 
             navigator.geolocation.getCurrentPosition(
@@ -139,21 +159,62 @@ export async function getBestLocation(fallback = { lat: 30.033, lng: 31.233 }) {
                         lat: position.coords.latitude,
                         lng: position.coords.longitude
                     };
+                    // Always save fresh GPS data
                     saveUserLocation(location);
                     resolve(location);
                 },
-                // If GPS fails, use Cairo, Egypt as fallback
-                () => resolve(fallback),
-                //**
-                // requests the most accurate location possible,
-                //  Uses GPS satellite instead of just WiFi/cell tower triangulation
-                // time for maximum time to wait for location  */
-                { enableHighAccuracy: true, timeout: 5000 }
+                (error) => {
+                    if (throwOnError) {
+                        // Provide specific error messages when throwing
+                        let message;
+                        switch (error.code) {
+                            case error.PERMISSION_DENIED:
+                                message = 'Location access denied. Please enable location services.';
+                                break;
+                            case error.POSITION_UNAVAILABLE:
+                                message = 'Location information is unavailable.';
+                                break;
+                            case error.TIMEOUT:
+                                message = 'Location request timed out. Please try again.';
+                                break;
+                            default:
+                                message = 'An unknown error occurred while retrieving location.';
+                                break;
+                        }
+                        reject(new Error(message));
+                    } else {
+                        // Fallback gracefully when not throwing errors
+                        resolve(fallback);
+                    }
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout,
+                    maximumAge: forceFresh ? 0 : 60000 // Fresh = no cache, otherwise 1min cache
+                }
             );
         });
     } catch (error) {
-        // if geolocation failed or get user locatiom ... it will return this fallback 
-        console.error('getBestLocation failed:', error);
+        console.error('getLocation failed:', error);
+        if (throwOnError) {
+            throw error;
+        }
         return fallback;
     }
+}
+
+/**
+ * Convenience function for getting best available location (saved → GPS → fallback)
+ * Use this for initial map loading
+ */
+export async function getBestLocation(fallback = { lat: 30.033, lng: 31.233 }) {
+    return getLocation({ forceFresh: false, fallback, throwOnError: false });
+}
+
+/**
+ * Convenience function for getting fresh GPS location
+ * Use this for "Get Current Location" buttons
+ */
+export async function getFreshLocation() {
+    return getLocation({ forceFresh: true, throwOnError: true, timeout: 10000 });
 }

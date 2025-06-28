@@ -1,6 +1,11 @@
 <script>
 	import { onMount } from 'svelte';
-	import { getBestLocation, saveUserLocation } from '$lib/utils/indexedDB.js';
+	import {
+		getBestLocation,
+		saveUserLocation,
+		getFreshLocation,
+		getLocation
+	} from '$lib/utils/indexedDB.js';
 
 	let mapDiv; // DOM reference to the map container
 	let center = { lat: 30.033, lng: 31.233 }; // Default location (Cairo) (Fallback location)
@@ -18,12 +23,16 @@
 	// established before codee runs */
 	onMount(async () => {
 		try {
-			// Get geolocation saved in indexed db
-			const location = await getBestLocation(center);
-			const { lat, lng } = location;
+			// Get best available location (saved → GPS → fallback)
+			const location = await getLocation({
+				forceFresh: false,
+				fallback: center,
+				throwOnError: false
+			});
+
 			center = {
-				lat: +lat,
-				lng: +lng
+				lat: +location.lat,
+				lng: +location.lng
 			};
 			console.log('Using location:', center);
 		} catch (error) {
@@ -53,6 +62,7 @@
 			return;
 		}
 
+		// create script element and append it to head
 		const script = document.createElement('script');
 		script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,marker&callback=initMap`;
 		// async = downloads in background, defer = waits for DOM ready
@@ -125,6 +135,32 @@
 		}
 	}
 
+	// Get user's current location via GPS - uses getFreshLocation for real-time position
+	let isGettingLocation = false;
+
+	async function getCurrentLocation() {
+		isGettingLocation = true;
+		mapError = null; // Clear any previous errors
+
+		try {
+			// Get fresh GPS location with error throwing
+			const newLocation = await getLocation({
+				forceFresh: true,
+				throwOnError: true,
+				timeout: 10000
+			});
+
+			// Update map center (location is already saved by getLocation)
+			center = newLocation;
+			console.log('📍 Updated to current location:', newLocation);
+		} catch (error) {
+			console.error('Failed to get current location:', error);
+			mapError = error.message; // Use the specific error message from getLocation
+		} finally {
+			isGettingLocation = false;
+		}
+	}
+
 	// Reactive update when center changes
 	$: if (map && marker && center) {
 		try {
@@ -154,7 +190,23 @@
 		</div>
 	</div>
 {:else}
-	<div bind:this={mapDiv} class="map-view"></div>
+	<div class="map-container">
+		<div bind:this={mapDiv} class="map-view"></div>
+
+		<!-- Current Location Button -->
+		<button
+			class="location-button"
+			on:click={getCurrentLocation}
+			disabled={isGettingLocation}
+			title="Get current location"
+		>
+			{#if isGettingLocation}
+				<div class="button-spinner"></div>
+			{:else}
+				📍
+			{/if}
+		</button>
+	</div>
 {/if}
 
 <style>
@@ -203,6 +255,52 @@
 		width: 100%;
 		height: 100vh;
 		background-color: #e9ecef;
+	}
+
+	.map-container {
+		position: relative;
+		width: 100%;
+		height: 100vh;
+	}
+
+	.location-button {
+		position: absolute;
+		top: 20px;
+		right: 20px;
+		width: 50px;
+		height: 50px;
+		border-radius: 50%;
+		border: 2px solid #fff;
+		background: #4285f4;
+		color: white;
+		font-size: 20px;
+		cursor: pointer;
+		box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+		z-index: 1000;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		transition: all 0.2s ease;
+	}
+
+	.location-button:hover:not(:disabled) {
+		background: #3367d6;
+		transform: scale(1.05);
+	}
+
+	.location-button:disabled {
+		opacity: 0.7;
+		cursor: not-allowed;
+		transform: none;
+	}
+
+	.button-spinner {
+		width: 20px;
+		height: 20px;
+		border: 2px solid transparent;
+		border-top: 2px solid white;
+		border-radius: 50%;
+		animation: spin 1s linear infinite;
 	}
 
 	.map-fallback {
