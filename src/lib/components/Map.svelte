@@ -1,314 +1,265 @@
 <script>
+	// Svelte lifecycle imports
 	import { onMount } from 'svelte';
+
+	// Google Maps utility functions - handles API loading, map initialization, and interactions
 	import {
-		getBestLocation,
-		saveUserLocation,
-		getFreshLocation,
-		getLocation
-	} from '$lib/utils/indexedDB.js';
+		loadGoogleMapsAPI, // Loads Google Maps JavaScript API with performance optimization
+		initializeMap, // Creates map and marker instances with proper configuration
+		setupMarkerEvents, // Sets up drag event listeners with debounced saving
+		updateMapPosition // Updates map center and marker position reactively
+	} from '$lib/utils/mapUtils.js';
 
-	let mapDiv; // DOM reference to the map container
-	let center = { lat: 30.033, lng: 31.233 }; // Default location (Cairo) (Fallback location)
-	let isLoading = true; // Show loading spinner while initializing
-	let locationError = null; // Show loading spinner while initializing
-	let map = null; // Show loading spinner while initializing
-	let marker = null; // Will hold draggable marker
-	let googleMapsReady = false; // Whether Google Maps SDK is loaded
-	let mapError = null; // Whether Google Maps SDK is loaded
+	// Location utility functions - handles GPS access, validation, and formatting
+	import {
+		getLocationWithFallback, // Smart location retrieval with GPS and saved location fallback
+		formatLocation // Formats coordinates for display (e.g., "Lat: 30.033, Lng: 31.233")
+	} from '$lib/utils/locationUtils.js';
 
-	//**
-	// why on mount?
-	// because map needs to find its refrence div to exist in the dom before initialization
-	// so using on mount makes sure component is fully mounted and all dom bindings are
-	// established before codee runs */
+	// External CSS file containing all component styles
+	import '$lib/styles/Map.css';
+
+	// ============================================================================
+	// COMPONENT STATE VARIABLES
+	// ============================================================================
+
+	// DOM reference to the map container element (bound with bind:this)
+	let mapDiv;
+
+	// Current map center coordinates - defaults to Cairo, Egypt
+	let center = { lat: 30.033, lng: 31.233 };
+
+	// Loading state - true while getting initial location from IndexedDB
+	let isLoading = true;
+
+	// Error message for location-related errors (GPS access, saved location, etc.)
+	let locationError = null;
+
+	// Google Maps instance - null until map is successfully initialized
+	let map = null;
+
+	// Google Maps marker instance - represents user's location on the map
+	let marker = null;
+
+	// Flag indicating whether Google Maps API has been loaded and is ready to use
+	let googleMapsReady = false;
+
+	// Error message for map-related errors (API loading, initialization, etc.)
+	let mapError = null;
+
+	// Flag to prevent multiple simultaneous location requests when user clicks location button
+	let isGettingLocation = false;
+
+	// ============================================================================
+	// DYNAMIC IMPORTS - Loaded only when needed for performance
+	// ============================================================================
+
+	// These functions are loaded dynamically to reduce initial bundle size
+	let getLocation; // Function to get location from IndexedDB or GPS
+	let saveUserLocation; // Function to save user's location to IndexedDB
+
+	// ============================================================================
+	// COMPONENT INITIALIZATION
+	// ============================================================================
+
+	/**
+	 * Component lifecycle - runs when component is first mounted to the DOM
+	 * Handles:
+	 * 1. Dynamic import of IndexedDB utilities (performance optimization)
+	 * 2. Loading saved location from IndexedDB
+	 * 3. Setting initial map center
+	 * 4. Starting Google Maps API loading process
+	 */
 	onMount(async () => {
 		try {
-			// Get best available location (saved → GPS → fallback)
+			// Dynamically import IndexedDB utilities to reduce initial bundle size
+			// This is loaded only when the component mounts, not during app startup
+			const locationUtils = await import('$lib/utils/indexedDB.js');
+			getLocation = locationUtils.getLocation;
+			saveUserLocation = locationUtils.saveUserLocation;
+
+			// Attempt to get saved location from IndexedDB
+			// Falls back to default center (Cairo) if no saved location exists
 			const location = await getLocation({
-				forceFresh: false,
-				fallback: center,
-				throwOnError: false
+				forceFresh: false, // Use saved location if available
+				fallback: center, // Use Cairo as fallback
+				throwOnError: false // Don't throw errors, use fallback instead
 			});
 
-			center = {
-				lat: +location.lat,
-				lng: +location.lng
-			};
-			console.log('Using location:', center);
+			// Update center with retrieved location, ensuring numeric values
+			center = { lat: +location.lat, lng: +location.lng };
 		} catch (error) {
-			console.error('Location error:', error);
+			// If location retrieval fails, store error message for display
 			locationError = error.message;
 		} finally {
+			// Always stop loading spinner and start Google Maps loading
 			isLoading = false;
-			loadGoogleMaps();
+
+			// Use requestIdleCallback for non-blocking Google Maps loading
+			// This defers loading until the browser is idle, improving initial page performance
+			requestIdleCallback(loadGoogleMaps);
 		}
 	});
 
-	// loads Google Maps JavaScript API only when needed
+	// ============================================================================
+	// GOOGLE MAPS LOADING AND INITIALIZATION
+	// ============================================================================
+
+	/**
+	 * Loads Google Maps JavaScript API and initializes the map
+	 * Uses performance-optimized loading strategy to minimize blocking
+	 */
 	async function loadGoogleMaps() {
-		// check if  google object and google map is already there so it avoids loading it twice
-		if (window.google && window.google.maps) {
-			googleMapsReady = true;
-			// if already loaded, immediately initialize the map
-			initMap();
-			return;
-		}
+		try {
+			// Get API key from environment variables
+			const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 
-		// Check if API key is configured
-		const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-		if (!apiKey) {
-			mapError = 'Google Maps API key not configured. Please check your .env file.';
-			console.error('VITE_GOOGLE_MAPS_API_KEY not found in environment variables');
-			return;
-		}
+			// Load Google Maps API using utility function
+			// This handles script injection, callback setup, and error handling
+			await loadGoogleMapsAPI(apiKey);
 
-		// create script element and append it to head
-		const script = document.createElement('script');
-		script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places,marker&callback=initMap`;
-		// async = downloads in background, defer = waits for DOM ready
-		script.async = true;
-		script.defer = true;
-
-		window.initMap = () => {
-			console.log('Google Maps API loaded');
+			// Mark API as ready and initialize the map
 			googleMapsReady = true;
 			initMap();
-		};
-
-		script.onerror = () => {
-			mapError = 'Failed to load Google Maps. Please check your internet connection.';
-			console.error('Google Maps script failed to load');
-		};
-
-		document.head.appendChild(script);
+		} catch (error) {
+			// Store error message if API loading fails
+			mapError = error.message;
+		}
 	}
 
+	/**
+	 * Initializes the Google Maps instance and marker
+	 * Only runs when API is loaded, DOM element is available, and initial loading is complete
+	 */
 	async function initMap() {
+		// Guard clause - ensure all prerequisites are met
 		if (!googleMapsReady || !mapDiv || isLoading) return;
-		if (!window.google || !window.google.maps) {
-			mapError = 'Google Maps library not available';
-			return;
-		}
 
 		try {
-			const { Map } = await google.maps.importLibrary('maps');
-			const { AdvancedMarkerElement } = await google.maps.importLibrary('marker');
+			// Use utility function to create map and marker with optimized settings
+			const result = await initializeMap(mapDiv, center);
+			map = result.map;
+			marker = result.marker;
 
-			// Create map instance
-			map = new Map(mapDiv, {
-				center,
-				zoom: 15,
-				mapId: 'DEMO_MAP_ID',
-				gestureHandling: 'greedy'
+			// Setup marker drag events with automatic saving to IndexedDB
+			// The callback is called with debouncing (250ms delay) when marker is dragged
+			setupMarkerEvents(marker, async (newLocation) => {
+				// Save new location to IndexedDB for persistence
+				await saveUserLocation(newLocation);
+				// Update component state to trigger reactive updates
+				center = newLocation;
 			});
-
-			// Create draggable marker
-			marker = new AdvancedMarkerElement({
-				position: new google.maps.LatLng(center.lat, center.lng),
-				map,
-				gmpDraggable: true,
-				title: 'Your Location'
-			});
-
-			// debounce
-
-			let saveTimeout;
-
-			marker.addListener('dragend', (event) => {
-				clearTimeout(saveTimeout); // 🧽 Cancel previous save if not completed
-
-				const newLocation = {
-					lat: event.latLng.lat(),
-					lng: event.latLng.lng()
-				};
-
-				saveTimeout = setTimeout(async () => {
-					await saveUserLocation(newLocation); // 💾 Save only once after delay
-					center = newLocation;
-				}, 250); // Wait 250ms after the last drag
-			});
-
-			console.log('🗺️ Map initialized at:', center);
 		} catch (error) {
 			console.error('Map initialization error:', error);
 			mapError = 'Failed to initialize map. Please try refreshing the page.';
 		}
 	}
 
-	// Get user's current location via GPS - uses getFreshLocation for real-time position
-	let isGettingLocation = false;
+	// ============================================================================
+	// USER INTERACTION HANDLERS
+	// ============================================================================
 
+	/**
+	 * Gets user's current location using GPS
+	 * Called when user clicks the floating location button
+	 * Implements proper loading states and error handling
+	 */
 	async function getCurrentLocation() {
+		// Prevent multiple simultaneous requests
+		if (isGettingLocation) return;
+
+		// Set loading state and clear any previous errors
 		isGettingLocation = true;
-		mapError = null; // Clear any previous errors
+		mapError = null;
 
 		try {
-			// Get fresh GPS location with error throwing
-			const newLocation = await getLocation({
-				forceFresh: true,
-				throwOnError: true,
-				timeout: 10000
+			// Use location utility with fallback strategy
+			const newLocation = await getLocationWithFallback(getLocation, {
+				forceFresh: true, // Force GPS location, don't use saved
+				throwOnError: true, // Throw errors instead of using fallback
+				timeout: 10000 // 10 second timeout for GPS request
 			});
 
-			// Update map center (location is already saved by getLocation)
+			// Update map center - this will trigger reactive map update
 			center = newLocation;
-			console.log('📍 Updated to current location:', newLocation);
 		} catch (error) {
-			console.error('Failed to get current location:', error);
-			mapError = error.message; // Use the specific error message from getLocation
+			// Display error message to user
+			mapError = error.message;
 		} finally {
+			// Always clear loading state
 			isGettingLocation = false;
 		}
 	}
 
-	// Reactive update when center changes
-	$: if (map && marker && center) {
-		try {
-			// Ensure we have a LatLng object
-			const position = new google.maps.LatLng(parseFloat(center.lat), parseFloat(center.lng));
+	// ============================================================================
+	// REACTIVE UPDATES
+	// ============================================================================
 
-			marker.position = position;
-			map.panTo(position);
-		} catch (error) {
-			console.error('Map update error:', error);
-		}
+	/**
+	 * Reactive statement - automatically runs when map, marker, or center changes
+	 * Updates the map view and marker position when center coordinates change
+	 * This ensures the map stays in sync with the component state
+	 */
+	$: if (map && marker && center) {
+		updateMapPosition(map, marker, center);
 	}
 </script>
 
+<!-- 
+	COMPONENT TEMPLATE
+	Renders different UI states based on loading, error, and map readiness conditions
+	Uses Svelte's reactive conditional rendering with {#if} blocks
+-->
+
+<!-- LOADING STATE: Shown while getting initial location from IndexedDB -->
 {#if isLoading}
 	<div class="loading-container">
+		<!-- Animated CSS spinner for visual feedback -->
 		<div class="loading-spinner"></div>
 		<p>Getting your location...</p>
 	</div>
+
+	<!-- ERROR STATE: Shown when location or map errors occur -->
 {:else if locationError || mapError}
 	<div class="error-container">
+		<!-- Display error message with warning icon -->
 		<p>⚠️ {locationError || mapError}</p>
-		<p>Using default location instead.</p>
-		<div class="map-fallback">
-			<p>Map cannot be displayed</p>
-			<p>Lat: {center.lat.toFixed(6)}, Lng: {center.lng.toFixed(6)}</p>
-		</div>
+		<!-- Show current coordinates using utility function for consistent formatting -->
+		<p>{formatLocation(center)}</p>
 	</div>
+
+	<!-- MAIN MAP STATE: Shown when loading is complete and no errors -->
 {:else}
 	<div class="map-container">
+		<!-- 
+			Map container element - bound to mapDiv variable for DOM manipulation
+			This is where the Google Maps instance will be rendered
+		-->
 		<div bind:this={mapDiv} class="map-view"></div>
 
-		<!-- Current Location Button -->
+		<!-- 
+			Floating location button - positioned absolutely over the map
+			Allows user to get their current GPS location
+		-->
 		<button
 			class="location-button"
 			on:click={getCurrentLocation}
 			disabled={isGettingLocation}
+			aria-label="Get current location"
 			title="Get current location"
 		>
+			<!-- BUTTON LOADING STATE: Show spinner while getting GPS location -->
 			{#if isGettingLocation}
 				<div class="button-spinner"></div>
+				<!-- Screen reader text for accessibility -->
+				<span class="visually-hidden">Getting location...</span>
+
+				<!-- BUTTON NORMAL STATE: Show location pin icon -->
 			{:else}
 				📍
+				<!-- Screen reader text for accessibility -->
+				<span class="visually-hidden">Get current location</span>
 			{/if}
 		</button>
 	</div>
 {/if}
-
-<style>
-	.loading-container,
-	.error-container {
-		display: flex;
-		flex-direction: column;
-		justify-content: center;
-		align-items: center;
-		height: 100vh;
-		font-family: Arial, sans-serif;
-		text-align: center;
-		padding: 20px;
-	}
-
-	.loading-container {
-		background-color: #f5f5f5;
-	}
-
-	.error-container {
-		background-color: #fff3cd;
-		border: 1px solid #ffeaa7;
-		color: #856404;
-	}
-
-	.loading-spinner {
-		width: 40px;
-		height: 40px;
-		border: 4px solid #e3e3e3;
-		border-top: 4px solid #3498db;
-		border-radius: 50%;
-		animation: spin 1s linear infinite;
-		margin-bottom: 16px;
-	}
-
-	@keyframes spin {
-		0% {
-			transform: rotate(0deg);
-		}
-		100% {
-			transform: rotate(360deg);
-		}
-	}
-
-	.map-view {
-		width: 100%;
-		height: 100vh;
-		background-color: #e9ecef;
-	}
-
-	.map-container {
-		position: relative;
-		width: 100%;
-		height: 100vh;
-	}
-
-	.location-button {
-		position: absolute;
-		top: 20px;
-		right: 20px;
-		width: 50px;
-		height: 50px;
-		border-radius: 50%;
-		border: 2px solid #fff;
-		background: #4285f4;
-		color: white;
-		font-size: 20px;
-		cursor: pointer;
-		box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-		z-index: 1000;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		transition: all 0.2s ease;
-	}
-
-	.location-button:hover:not(:disabled) {
-		background: #3367d6;
-		transform: scale(1.05);
-	}
-
-	.location-button:disabled {
-		opacity: 0.7;
-		cursor: not-allowed;
-		transform: none;
-	}
-
-	.button-spinner {
-		width: 20px;
-		height: 20px;
-		border: 2px solid transparent;
-		border-top: 2px solid white;
-		border-radius: 50%;
-		animation: spin 1s linear infinite;
-	}
-
-	.map-fallback {
-		margin-top: 20px;
-		padding: 15px;
-		background: white;
-		border-radius: 8px;
-		box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-		font-size: 0.9em;
-	}
-</style>

@@ -11,7 +11,12 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./jsconfig.json --watch",
 		"format": "prettier --write .",
-		"lint": "prettier --check . && eslint ."
+		"lint": "prettier --check . && eslint .",
+		"test:performance": "node scripts/performance-test.mjs",
+		"test:lighthouse": "npm run build && npx lighthouse http://localhost:3000 --view",
+		"test:mobile": "npm run build && npx lighthouse http://localhost:3000 --preset=perf --form-factor=mobile --view",
+		"analyze:bundle": "npm run build && npx vite-bundle-analyzer dist/",
+		"serve:local": "npm run build && npx serve dist -l 3000"
 	},
 	"devDependencies": {
 		"@eslint/compat": "^1.2.5",
