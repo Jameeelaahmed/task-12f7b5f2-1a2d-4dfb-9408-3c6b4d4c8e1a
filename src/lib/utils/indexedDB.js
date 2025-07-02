@@ -8,7 +8,7 @@
  * - GPS location access with intelligent caching
  * - Multiple location retrieval strategies (saved, fresh, fallback)
  * - Error handling and graceful degradation
- * - Performance optimization through database connection pooling
+ * - Performance optimization through singleton pattern connection caching
  */
 
 // ============================================================================
@@ -29,8 +29,8 @@ let dbInstance = null;
 // ============================================================================
 
 /**
- * Get or create IndexedDB database connection with connection pooling
- * Implements singleton pattern to reuse database connections efficiently
+ * Get or create IndexedDB database connection using singleton pattern
+ * Implements singleton pattern to reuse database connection efficiently
  * Handles database schema creation and version management
  * 
  * @returns {Promise<IDBDatabase>} IndexedDB database instance
@@ -42,7 +42,7 @@ let dbInstance = null;
  * - Manage version upgrades for schema changes
  */
 async function getDB() {
-    // CONNECTION POOLING: Return cached instance if available
+    // SINGLETON PATTERN: Return cached instance if available
     // Prevents multiple database connections and improves performance
     if (dbInstance) return dbInstance;
 
@@ -148,7 +148,7 @@ export async function saveUserLocation(location) {
             throw new Error('Coordinates out of valid range');
         }
 
-        // DATABASE CONNECTION: Get IndexedDB instance using connection pooling
+        // DATABASE CONNECTION: Get IndexedDB instance using singleton pattern
         const db = await getDB();
 
         // TRANSACTION SETUP: Create write transaction for location store
@@ -208,7 +208,7 @@ export async function saveUserLocation(location) {
  */
 export async function getUserLocation() {
     try {
-        // DATABASE CONNECTION: Get IndexedDB instance using connection pooling
+        // DATABASE CONNECTION: Get IndexedDB instance using singleton pattern
         const db = await getDB();
 
         // TRANSACTION SETUP: Create read-only transaction for location retrieval
